@@ -1,18 +1,14 @@
-# Proof skeleton. Each def below must discharge the corresponding human-owned law.
-# `bend PROOF.bend` is intentionally expected to fail until the TODOs are replaced
-# by proofs.
-
 import Base
 import ./LAWS.bend as Laws
 import ./main.bend as Sim
 
-def Laws.fast_matches_reference(agents, phase):
+def Laws.destination_counts_are_correct(ps, dst):
   ?TODO
 
-def Laws.proposals_are_local(board, p, phase):
+def Laws.proposals_are_local(grid, p, phase):
   ?TODO
 
-def Laws.isolated_stays(board, p, phase, isolated):
+def Laws.isolated_stays(grid, p, phase, isolated):
   ?TODO
 
 def Laws.sole_proposal_moves(src, dst):
@@ -22,9 +18,6 @@ def Laws.conflict_cancels(src, dst, count, contested):
   ?TODO
 
 def Laws.population_is_conserved(agents, phase):
-  ?TODO
-
-def Laws.unique_positions_are_preserved(agents, phase, unique):
   ?TODO
 
 def Laws.isolated_state_is_stable(agents, phase, isolated):

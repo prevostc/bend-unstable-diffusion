@@ -1,13 +1,15 @@
 import Base
-import ./u32trie.bend as T
+import ./lib/pos.bend as P
+import ./lib/grid.bend as G
+import ./lib/u32bag.bend as T
 
 # Advent of Code 2022, Day 23: Unstable Diffusion.
 #
 # This version deliberately contains two implementations of one round:
 #   - step_spec: small, direct executable specification (O(n^2))
-#   - step_fast: destination-count map + parallel tree traversals
+#   - step: destination-count map + parallel tree traversals
 #
-# The main verification target is: step_fast == step_spec.
+# The main verification target is: step == step_spec.
 #
 # Coordinates use U32. For exact AoC plane semantics, place the initial
 # configuration far enough from 0 / 2^32-1 that no simulated round wraps.
@@ -15,9 +17,6 @@ import ./u32trie.bend as T
 # -----------------------------------------------------------------------------
 # Domain
 # -----------------------------------------------------------------------------
-
-type Pos is Data:
-  Pos{x: U32, y: U32}
 
 type Dir is Data:
   N{}
@@ -32,86 +31,12 @@ type Phase is Data:
   P3{} # E N S W
 
 type Proposal is Data:
-  Proposal{src: Pos, dst: Pos}
+  Proposal{src: P.Pos, dst: P.Pos}
 
 # A balanced tree is friendlier to Bend's fork/join parallelism than a list.
 type Batch<-A: Data> is Data:
   One{value: A}
   Fork{left: Batch<A>, right: Batch<A>}
-
-# -----------------------------------------------------------------------------
-# Positions
-# -----------------------------------------------------------------------------
-
-def Pos.eq(a: Pos, b: Pos) -> Bool:
-  match a b:
-    case Pos{ax, ay} Pos{bx, by}:
-      Bool.and(U32.is_eq(ax, bx), U32.is_eq(ay, by))
-
-def Pos.n(p: Pos) -> Pos:
-  match p:
-    case Pos{x, y}:
-      Pos{x, U32.sub(y, 1)}
-
-def Pos.s(p: Pos) -> Pos:
-  match p:
-    case Pos{x, y}:
-      Pos{x, U32.add(y, 1)}
-
-def Pos.w(p: Pos) -> Pos:
-  match p:
-    case Pos{x, y}:
-      Pos{U32.sub(x, 1), y}
-
-def Pos.e(p: Pos) -> Pos:
-  match p:
-    case Pos{x, y}:
-      Pos{U32.add(x, 1), y}
-
-def Pos.nw(p: Pos) -> Pos:
-  match p:
-    case Pos{x, y}:
-      Pos{U32.sub(x, 1), U32.sub(y, 1)}
-
-def Pos.ne(p: Pos) -> Pos:
-  match p:
-    case Pos{x, y}:
-      Pos{U32.add(x, 1), U32.sub(y, 1)}
-
-def Pos.sw(p: Pos) -> Pos:
-  match p:
-    case Pos{x, y}:
-      Pos{U32.sub(x, 1), U32.add(y, 1)}
-
-def Pos.se(p: Pos) -> Pos:
-  match p:
-    case Pos{x, y}:
-      Pos{U32.add(x, 1), U32.add(y, 1)}
-
-def Pos.key(p: Pos) -> String:
-  match p:
-    case Pos{x, y}:
-      U32.show(x) ++ ":" ++ U32.show(y)
-
-def Pos.key32(p: Pos) -> U32:
-  match p:
-    case Pos{x, y}:
-      U32.or(
-        U32.shln(U32.and(x, 65535), 16n),
-        U32.and(y, 65535)
-      )
-
-def Pos.cardinal_or_same(+src: Pos, +dst: Pos) -> Bool:
-  Bool.or(
-    Pos.eq(src, dst),
-    Bool.or(
-      Pos.eq(Pos.n(src), dst),
-      Bool.or(
-        Pos.eq(Pos.s(src), dst),
-        Bool.or(Pos.eq(Pos.w(src), dst), Pos.eq(Pos.e(src), dst))
-      )
-    )
-  )
 
 # -----------------------------------------------------------------------------
 # Batch utilities
@@ -137,167 +62,63 @@ def Batch.to_list(-A: Data, xs: Batch<A>) -> List<&2, A>:
 # Occupancy / directional predicates
 # -----------------------------------------------------------------------------
 
-def Board.occupied(+xs: List<&2, Pos>, +q: Pos) -> Bool:
-  match xs:
-    case Nil{}:
-      False{}
-    case h <> t:
-      Bool.or(Pos.eq(h, q), Board.occupied(t, q))
-
-
-# -----------------------------------------------------------------------------
-# Fast occupancy index: numeric U32 trie
-# -----------------------------------------------------------------------------
-
-def Board.index(xs: Batch<Pos>) -> T.Trie:
-  match xs:
-    case One{p}:
-      T.Trie.add(
-        T.Tip{},
-        Pos.key32(p),
-        1
-      )
-    case Fork{l, r}:
-      a b =
-        Board.index(l)
-        Board.index(r)
-      T.Trie.merge(a, b)
-
-def Board.occupied_fast(
-  +b: T.Trie,
-  p: Pos
-) -> Bool:
-  U32.is_ne(
-    T.Trie.get(b, Pos.key32(p)),
-    0
-  )
-
-def Board.has_neighbor_fast(
-  +b: T.Trie,
-  +p: Pos
-) -> Bool:
-  Bool.or(
-    Board.occupied_fast(b, Pos.nw(p)),
-    Bool.or(
-      Board.occupied_fast(b, Pos.n(p)),
-      Bool.or(
-        Board.occupied_fast(b, Pos.ne(p)),
-        Bool.or(
-          Board.occupied_fast(b, Pos.w(p)),
-          Bool.or(
-            Board.occupied_fast(b, Pos.e(p)),
-            Bool.or(
-              Board.occupied_fast(b, Pos.sw(p)),
-              Bool.or(
-                Board.occupied_fast(b, Pos.s(p)),
-                Board.occupied_fast(b, Pos.se(p))
-              )
-            )
-          )
-        )
-      )
-    )
-  )
-
-def Board.has_neighbor(+b: List<&2, Pos>, +p: Pos) -> Bool:
-  Bool.or(
-    Board.occupied(b, Pos.nw(p)),
-    Bool.or(
-      Board.occupied(b, Pos.n(p)),
-      Bool.or(
-        Board.occupied(b, Pos.ne(p)),
-        Bool.or(
-          Board.occupied(b, Pos.w(p)),
-          Bool.or(
-            Board.occupied(b, Pos.e(p)),
-            Bool.or(
-              Board.occupied(b, Pos.sw(p)),
-              Bool.or(Board.occupied(b, Pos.s(p)), Board.occupied(b, Pos.se(p)))
-            )
-          )
-        )
-      )
-    )
-  )
-
-def Dir.step(d: Dir, p: Pos) -> Pos:
+def Dir.step(d: Dir, p: P.Pos) -> P.Pos:
   match d:
     case N{}:
-      Pos.n(p)
+      P.Pos.n(p)
     case S{}:
-      Pos.s(p)
+      P.Pos.s(p)
     case W{}:
-      Pos.w(p)
+      P.Pos.w(p)
     case E{}:
-      Pos.e(p)
+      P.Pos.e(p)
 
-def Dir.clear(+b: List<&2, Pos>, +p: Pos, d: Dir) -> Bool:
-  match d:
-    case N{}:
-      Bool.not(Bool.or(
-        Board.occupied(b, Pos.nw(p)),
-        Bool.or(Board.occupied(b, Pos.n(p)), Board.occupied(b, Pos.ne(p)))
-      ))
-    case S{}:
-      Bool.not(Bool.or(
-        Board.occupied(b, Pos.sw(p)),
-        Bool.or(Board.occupied(b, Pos.s(p)), Board.occupied(b, Pos.se(p)))
-      ))
-    case W{}:
-      Bool.not(Bool.or(
-        Board.occupied(b, Pos.nw(p)),
-        Bool.or(Board.occupied(b, Pos.w(p)), Board.occupied(b, Pos.sw(p)))
-      ))
-    case E{}:
-      Bool.not(Bool.or(
-        Board.occupied(b, Pos.ne(p)),
-        Bool.or(Board.occupied(b, Pos.e(p)), Board.occupied(b, Pos.se(p)))
-      ))
-
-
-def Dir.clear_fast(
+def Dir.clear(
   +b: T.Trie,
-  +p: Pos,
+  +p: P.Pos,
   d: Dir
 ) -> Bool:
   match d:
     case N{}:
       Bool.not(
         Bool.or(
-          Board.occupied_fast(b, Pos.nw(p)),
+          G.Grid.has(b, P.Pos.nw(p)),
           Bool.or(
-            Board.occupied_fast(b, Pos.n(p)),
-            Board.occupied_fast(b, Pos.ne(p))
+            G.Grid.has(b, P.Pos.n(p)),
+            G.Grid.has(b, P.Pos.ne(p))
           )
         )
       )
+
     case S{}:
       Bool.not(
         Bool.or(
-          Board.occupied_fast(b, Pos.sw(p)),
+          G.Grid.has(b, P.Pos.sw(p)),
           Bool.or(
-            Board.occupied_fast(b, Pos.s(p)),
-            Board.occupied_fast(b, Pos.se(p))
+            G.Grid.has(b, P.Pos.s(p)),
+            G.Grid.has(b, P.Pos.se(p))
           )
         )
       )
+
     case W{}:
       Bool.not(
         Bool.or(
-          Board.occupied_fast(b, Pos.nw(p)),
+          G.Grid.has(b, P.Pos.nw(p)),
           Bool.or(
-            Board.occupied_fast(b, Pos.w(p)),
-            Board.occupied_fast(b, Pos.sw(p))
+            G.Grid.has(b, P.Pos.w(p)),
+            G.Grid.has(b, P.Pos.sw(p))
           )
         )
       )
+
     case E{}:
       Bool.not(
         Bool.or(
-          Board.occupied_fast(b, Pos.ne(p)),
+          G.Grid.has(b, P.Pos.ne(p)),
           Bool.or(
-            Board.occupied_fast(b, Pos.e(p)),
-            Board.occupied_fast(b, Pos.se(p))
+            G.Grid.has(b, P.Pos.e(p)),
+            G.Grid.has(b, P.Pos.se(p))
           )
         )
       )
@@ -328,14 +149,18 @@ def Phase.dirs(p: Phase) -> List<&2, Dir>:
     case P3{}:
       [E{}, N{}, S{}, W{}]
 
-def Propose.pick(clear: Bool, yes: Pos, no: Pos) -> Pos:
+def Propose.pick(clear: Bool, yes: P.Pos, no: P.Pos) -> P.Pos:
   match clear:
     case True{}:
       yes
     case False{}:
       no
 
-def Propose.choose(+b: List<&2, Pos>, +p: Pos, dirs: List<&2, Dir>) -> Pos:
+def Propose.choose(
+  +b: T.Trie,
+  +p: P.Pos,
+  dirs: List<&2, Dir>
+) -> P.Pos:
   match dirs:
     case Nil{}:
       p
@@ -348,47 +173,8 @@ def Propose.choose(+b: List<&2, Pos>, +p: Pos, dirs: List<&2, Dir>) -> Pos:
       )
 
 def Propose.after_neighbor(
-  +b: List<&2, Pos>, +p: Pos, phase: Phase, near: Bool
-) -> Proposal:
-  match near:
-    case False{}:
-      Proposal{p, p}
-    case True{}:
-      Proposal{p, Propose.choose(b, p, Phase.dirs(phase))}
-
-def Propose.one(+b: List<&2, Pos>, +p: Pos, phase: Phase) -> Proposal:
-  Propose.after_neighbor(b, p, phase, Board.has_neighbor(b, p))
-
-def Propose.all(
-  +b: List<&2, Pos>, +phase: Phase, xs: Batch<Pos>
-) -> Batch<Proposal>:
-  match xs:
-    case One{p}:
-      One{Propose.one(b, p, phase)}
-    case Fork{l, r}:
-      a c = Propose.all(b, phase, l) Propose.all(b, phase, r)
-      Fork{a, c}
-
-
-def Propose.choose_fast(
   +b: T.Trie,
-  +p: Pos,
-  dirs: List<&2, Dir>
-) -> Pos:
-  match dirs:
-    case Nil{}:
-      p
-    case +d <> rest:
-      fallback = Propose.choose_fast(b, p, rest)
-      Propose.pick(
-        Dir.clear_fast(b, p, d),
-        Dir.step(d, p),
-        fallback
-      )
-
-def Propose.after_neighbor_fast(
-  +b: T.Trie,
-  +p: Pos,
+  +p: P.Pos,
   phase: Phase,
   near: Bool
 ) -> Proposal:
@@ -398,41 +184,41 @@ def Propose.after_neighbor_fast(
     case True{}:
       Proposal{
         p,
-        Propose.choose_fast(b, p, Phase.dirs(phase))
+        Propose.choose(b, p, Phase.dirs(phase))
       }
 
-def Propose.one_fast(
+def Propose.one(
   +b: T.Trie,
-  +p: Pos,
+  +p: P.Pos,
   phase: Phase
 ) -> Proposal:
-  Propose.after_neighbor_fast(
+  Propose.after_neighbor(
     b,
     p,
     phase,
-    Board.has_neighbor_fast(b, p)
+    G.Grid.has_neighbor8(b, p)
   )
 
-def Propose.all_fast(
+def Propose.all(
   +b: T.Trie,
   +phase: Phase,
-  xs: Batch<Pos>
+  xs: Batch<P.Pos>
 ) -> Batch<Proposal>:
   match xs:
     case One{p}:
-      One{Propose.one_fast(b, p, phase)}
+      One{Propose.one(b, p, phase)}
     case Fork{l, r}:
       a c =
-        Propose.all_fast(b, phase, l)
-        Propose.all_fast(b, phase, r)
+        Propose.all(b, phase, l)
+        Propose.all(b, phase, r)
       Fork{a, c}
 
-def Proposal.src(p: Proposal) -> Pos:
+def Proposal.src(p: Proposal) -> P.Pos:
   match p:
     case Proposal{src, dst}:
       src
 
-def Proposal.dst(p: Proposal) -> Pos:
+def Proposal.dst(p: Proposal) -> P.Pos:
   match p:
     case Proposal{src, dst}:
       dst
@@ -440,51 +226,30 @@ def Proposal.dst(p: Proposal) -> Pos:
 def Proposal.is_local(p: Proposal) -> Bool:
   match p:
     case Proposal{+src, +dst}:
-      Pos.cardinal_or_same(src, dst)
+      P.Pos.cardinal_or_same(src, dst)
 
 # -----------------------------------------------------------------------------
 # Direct reference semantics (simple, intentionally O(n^2))
 # -----------------------------------------------------------------------------
 
-def Proposal.count_dst(+all: Batch<Proposal>, +dst: Pos) -> U32:
-  match all:
-    case One{p}:
-      Bool.to_u32(Pos.eq(Proposal.dst(p), dst))
-    case Fork{l, r}:
-      a b = Proposal.count_dst(l, dst) Proposal.count_dst(r, dst)
-      U32.add(a, b)
-
-def Resolve.one.go(unique: Bool, src: Pos, dst: Pos) -> Pos:
+def Resolve.one.go(unique: Bool, src: P.Pos, dst: P.Pos) -> P.Pos:
   match unique:
     case True{}:
       dst
     case False{}:
       src
 
-def Resolve.one(src: Pos, dst: Pos, count: U32) -> Pos:
+def Resolve.one(src: P.Pos, dst: P.Pos, count: U32) -> P.Pos:
   Resolve.one.go(U32.is_eq(count, 1), src, dst)
-
-def Commit.ref.one(+all: Batch<Proposal>, p: Proposal) -> Pos:
-  match p:
-    case Proposal{src, +dst}:
-      Resolve.one(src, dst, Proposal.count_dst(all, dst))
-
-def Commit.ref.all(+all: Batch<Proposal>, ps: Batch<Proposal>) -> Batch<Pos>:
-  match ps:
-    case One{p}:
-      One{Commit.ref.one(all, p)}
-    case Fork{l, r}:
-      a b = Commit.ref.all(all, l) Commit.ref.all(all, r)
-      Fork{a, b}
 
 # -----------------------------------------------------------------------------
 # Faster conflict counting: numeric U32 trie
 # -----------------------------------------------------------------------------
 
-def Counts.singleton(p: Pos) -> T.Trie:
+def Counts.singleton(p: P.Pos) -> T.Trie:
   T.Trie.add(
     T.Tip{},
-    Pos.key32(p),
+    P.Pos.key32(p),
     1
   )
 
@@ -499,7 +264,7 @@ def Counts.merge(
   a: T.Trie,
   b: T.Trie
 ) -> T.Trie:
-  T.Trie.merge(a, b)
+  G.Grid.merge(a, b)
 
 def Counts.from(ps: Batch<Proposal>) -> T.Trie:
   match ps:
@@ -514,14 +279,14 @@ def Counts.from(ps: Batch<Proposal>) -> T.Trie:
 
 def Counts.at(
   +m: T.Trie,
-  p: Pos
+  p: P.Pos
 ) -> U32:
-  T.Trie.get(m, Pos.key32(p))
+  T.Trie.get(m, P.Pos.key32(p))
 
-def Commit.fast.one(
+def Commit.one(
   +counts: T.Trie,
   p: Proposal
-) -> Pos:
+) -> P.Pos:
   match p:
     case Proposal{src, +dst}:
       Resolve.one(
@@ -530,92 +295,92 @@ def Commit.fast.one(
         Counts.at(counts, dst)
       )
 
-def Commit.fast.all(
+def Commit.all(
   +counts: T.Trie,
   ps: Batch<Proposal>
-) -> Batch<Pos>:
+) -> Batch<P.Pos>:
   match ps:
     case One{p}:
-      One{Commit.fast.one(counts, p)}
+      One{Commit.one(counts, p)}
 
     case Fork{l, r}:
       a b =
-        Commit.fast.all(counts, l)
-        Commit.fast.all(counts, r)
+        Commit.all(counts, l)
+        Commit.all(counts, r)
       Fork{a, b}
+
+# Build the numeric occupancy grid in parallel from the Batch.
+def Board.index(agents: Batch<P.Pos>) -> T.Trie:
+  match agents:
+    case One{p}:
+      G.Grid.add(
+        G.Grid.empty(),
+        p,
+        1
+      )
+
+    case Fork{l, r}:
+      a b =
+        Board.index(l)
+        Board.index(r)
+
+      G.Grid.merge(a, b)
+
 
 # -----------------------------------------------------------------------------
 # Whole round: spec vs optimized implementation
 # -----------------------------------------------------------------------------
 
-def step_spec(+agents: Batch<Pos>, +phase: Phase) -> Batch<Pos>:
-  +board = Batch.to_list(Pos, agents)
-  +props = Propose.all(board, phase, agents)
-  Commit.ref.all(props, props)
-
-def step_fast(+agents: Batch<Pos>, +phase: Phase) -> Batch<Pos>:
+def step(+agents: Batch<P.Pos>, +phase: Phase) -> Batch<P.Pos>:
   +board = Board.index(agents)
-  +props = Propose.all_fast(board, phase, agents)
+  +props = Propose.all(board, phase, agents)
   counts = Counts.from(props)
-  Commit.fast.all(counts, props)
+  Commit.all(counts, props)
 
-def run(fuel: Nat, +agents: Batch<Pos>, +phase: Phase) -> Batch<Pos>:
+def run(fuel: Nat, +agents: Batch<P.Pos>, +phase: Phase) -> Batch<P.Pos>:
   match fuel:
     case 0n:
       agents
     case 1n+p:
-      run(p, step_fast(agents, phase), Phase.next(phase))
+      run(p, step(agents, phase), Phase.next(phase))
 
 # -----------------------------------------------------------------------------
 # Predicates used by laws
 # -----------------------------------------------------------------------------
 
-def Board.unique(xs: List<&2, Pos>) -> Bool:
-  match xs:
-    case Nil{}:
-      True{}
-    case h <> +t:
-      Bool.and(
-        Bool.not(Board.occupied(t, h)),
-        Board.unique(t)
-      )
-
-def State.unique(agents: Batch<Pos>) -> Bool:
-  Board.unique(Batch.to_list(Pos, agents))
-
 def State.all_isolated.go(
-  +board: List<&2, Pos>, agents: Batch<Pos>
+  +board: T.Trie, agents: Batch<P.Pos>
 ) -> Bool:
   match agents:
     case One{p}:
-      Bool.not(Board.has_neighbor(board, p))
+      Bool.not(G.Grid.has_neighbor8(board, p))
     case Fork{l, r}:
       a b = State.all_isolated.go(board, l) State.all_isolated.go(board, r)
       Bool.and(a, b)
 
-def State.all_isolated(+agents: Batch<Pos>) -> Bool:
-  +board = Batch.to_list(Pos, agents)
+def State.all_isolated(+agents: Batch<P.Pos>) -> Bool:
+  +board = Board.index(agents)
   State.all_isolated.go(board, agents)
 
 # -----------------------------------------------------------------------------
 # AoC's five-elf worked example, offset by +100 in each axis.
 # -----------------------------------------------------------------------------
 
-def sample() -> Batch<Pos>:
+def sample() -> Batch<P.Pos>:
   Fork{
-    Fork{One{Pos{102, 101}}, One{Pos{103, 101}}},
+    Fork{One{P.Pos{102, 101}}, One{P.Pos{103, 101}}},
     Fork{
-      One{Pos{102, 102}},
-      Fork{One{Pos{102, 104}}, One{Pos{103, 104}}}
+      One{P.Pos{102, 102}},
+      Fork{One{P.Pos{102, 104}}, One{P.Pos{103, 104}}}
     }
   }
 
-def sample_after_3_expected() -> Batch<Pos>:
+def sample_after_3_expected() -> Batch<P.Pos>:
   Fork{
-    Fork{One{Pos{102, 100}}, One{Pos{104, 101}}},
+    Fork{One{P.Pos{102, 100}}, One{P.Pos{104, 101}}},
     Fork{
-      One{Pos{100, 102}},
-      Fork{One{Pos{102, 105}}, One{Pos{104, 103}}}
+      One{P.Pos{100, 102}},
+      Fork{One{P.Pos{102, 105}}, One{P.Pos{104, 103}}}
     }
   }
 
@@ -627,9 +392,9 @@ def sample_after_3_expected() -> Batch<Pos>:
 # Turn a '#' cell into an elf position; '.' contributes nothing.
 def Input.cell(
   hit: Bool,
-  p: Pos,
-  rest: List<&2, Pos>
-) -> List<&2, Pos>:
+  p: P.Pos,
+  rest: List<&2, P.Pos>
+) -> List<&2, P.Pos>:
   match hit:
     case False{}:
       rest
@@ -640,7 +405,7 @@ def Input.row(
   chars: List<&2, Char>,
   +x: U32,
   +y: U32
-) -> List<&2, Pos>:
+) -> List<&2, P.Pos>:
   match chars:
     case Nil{}:
       Nil{}
@@ -648,27 +413,27 @@ def Input.row(
       tail = Input.row(rest, U32.add(x, 1), y)
       Input.cell(
         Char.is_eq(c, '#'),
-        Pos{U32.add(x, 10000), U32.add(y, 10000)},
+        P.Pos{U32.add(x, 10000), U32.add(y, 10000)},
         tail
       )
 
 def Input.rows(
   lines: List<&2, String>,
   +y: U32
-) -> List<&2, Pos>:
+) -> List<&2, P.Pos>:
   match lines:
     case Nil{}:
       Nil{}
     case row <> rest:
       here = Input.row(String.to_list(row), 0, y)
       below = Input.rows(rest, U32.add(y, 1))
-      List.append(&2, Pos, here, below)
+      List.append(&2, P.Pos, here, below)
 
 # Convert the parsed list into the Batch representation expected by the
 # parallel simulation.
 def Batch.leaves(
-  xs: List<&2, Pos>
-) -> List<&2, Batch<Pos>>:
+  xs: List<&2, P.Pos>
+) -> List<&2, Batch<P.Pos>>:
   match xs:
     case Nil{}:
       Nil{}
@@ -678,8 +443,8 @@ def Batch.leaves(
 # Pair adjacent trees in one pass:
 # [a,b,c,d,e] -> [Fork(a,b), Fork(c,d), e]
 def Batch.pair(
-  xs: List<&2, Batch<Pos>>
-) -> List<&2, Batch<Pos>>:
+  xs: List<&2, Batch<P.Pos>>
+) -> List<&2, Batch<P.Pos>>:
   match xs:
     case Nil{}:
       Nil{}
@@ -694,8 +459,8 @@ def Batch.pair(
 # fuel makes termination structurally obvious to Bend.
 def Batch.collapse(
   fuel: Nat,
-  xs: List<&2, Batch<Pos>>
-) -> Maybe<&2, Batch<Pos>>:
+  xs: List<&2, Batch<P.Pos>>
+) -> Maybe<&2, Batch<P.Pos>>:
   match fuel xs:
     case 0n _:
       None{}
@@ -712,10 +477,10 @@ def Batch.collapse(
           )
 
 def Batch.from_list(
-  +xs: List<&2, Pos>
-) -> Maybe<&2, Batch<Pos>>:
+  +xs: List<&2, P.Pos>
+) -> Maybe<&2, Batch<P.Pos>>:
   Batch.collapse(
-    List.length(&2, Pos, xs),
+    List.length(&2, P.Pos, xs),
     Batch.leaves(xs)
   )
 
@@ -749,7 +514,7 @@ def Input.read(path: String) -> IO(String):
     text : String <- Input.read_result(pair)
     return text
 
-def Input.run(parsed: Maybe<&2, Batch<Pos>>) -> IO(Unit):
+def Input.run(parsed: Maybe<&2, Batch<P.Pos>>) -> IO(Unit):
   match parsed:
     case None{}:
       IO.die(Unit, 1, "input contains no elves")
@@ -757,7 +522,7 @@ def Input.run(parsed: Maybe<&2, Batch<Pos>>) -> IO(Unit):
       +result = run(10n, agents, P0{})
       IO.print(
         "elves after 10 rounds: "
-        ++ Nat.show(Batch.size(Pos, result))
+        ++ Nat.show(Batch.size(P.Pos, result))
       )
 
 def Input.main_args(args: List<String>) -> IO(Unit):
