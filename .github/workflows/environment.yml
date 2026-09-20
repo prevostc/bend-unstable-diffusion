@@ -1,0 +1,20 @@
+name: Bend environment smoke test
+
+on:
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Bend
+        run: bash scripts/bootstrap.sh
+      - name: Show Bend version
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          bend --version
+      - name: Run Unstable Diffusion smoke example
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          bend main.bend

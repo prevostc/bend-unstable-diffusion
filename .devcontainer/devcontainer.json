@@ -1,0 +1,21 @@
+{
+  "name": "Bend - Unstable Diffusion",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+  "remoteUser": "vscode",
+  "remoteEnv": {
+    "PATH": "${containerEnv:PATH}:/home/vscode/.local/bin"
+  },
+  "postCreateCommand": "bash scripts/bootstrap.sh",
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "files.associations": {
+          "*.bend": "plaintext"
+        },
+        "terminal.integrated.defaultProfile.linux": "bash"
+      }
+    }
+  }
+}
