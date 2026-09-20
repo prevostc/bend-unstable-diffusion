@@ -1,6 +1,6 @@
 import Base
 import ./LAWS.bend as Laws
-import ./main.bend as Sim
+import ./sim.bend as Sim
 
 def Laws.destination_counts_are_correct(ps, dst):
   ?TODO

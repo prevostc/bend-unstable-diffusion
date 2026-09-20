@@ -1,5 +1,5 @@
 import Base
-import ./main.bend as Sim
+import ./lib/sim.bend as Sim
 import ./lib/pos.bend as P
 import ./lib/bag.bend as B
 import ./proof/spec.bend as Spec

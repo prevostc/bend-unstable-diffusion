@@ -1,6 +1,6 @@
 import Base
-import ../main.bend as Sim
-import ../lib/pos.bend as P
+import ../sim.bend as Sim
+import ../pos.bend as P
 
 def count_dst(
   +all: Sim.Batch<Sim.Proposal>,
