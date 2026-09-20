@@ -1,4 +1,5 @@
 import Base
+import ./u32trie.bend as T
 
 # Advent of Code 2022, Day 23: Unstable Diffusion.
 #
@@ -92,6 +93,14 @@ def Pos.key(p: Pos) -> String:
     case Pos{x, y}:
       U32.show(x) ++ ":" ++ U32.show(y)
 
+def Pos.key32(p: Pos) -> U32:
+  match p:
+    case Pos{x, y}:
+      U32.or(
+        U32.shln(U32.and(x, 65535), 16n),
+        U32.and(y, 65535)
+      )
+
 def Pos.cardinal_or_same(+src: Pos, +dst: Pos) -> Bool:
   Bool.or(
     Pos.eq(src, dst),
@@ -137,46 +146,34 @@ def Board.occupied(+xs: List<&2, Pos>, +q: Pos) -> Bool:
 
 
 # -----------------------------------------------------------------------------
-# Fast occupancy index
+# Fast occupancy index: numeric U32 trie
 # -----------------------------------------------------------------------------
 
-def Board.index_merge(
-  b: Map<&2, U32>,
-  a: Map<&2, U32>
-) -> Map<&2, U32>:
-  match b:
-    case MTip{}:
-      a
-    case MLeaf{k, v}:
-      Map.set(&2, U32, a, k, 1)
-    case MNode{pos, lo, hi}:
-      a2 = Board.index_merge(lo, a)
-      Board.index_merge(hi, a2)
-
-def Board.index(xs: Batch<Pos>) -> Map<&2, U32>:
+def Board.index(xs: Batch<Pos>) -> T.Trie:
   match xs:
     case One{p}:
-      Map.set(&2, U32, MTip{}, Pos.key(p), 1)
+      T.Trie.add(
+        T.Tip{},
+        Pos.key32(p),
+        1
+      )
     case Fork{l, r}:
-      a b = Board.index(l) Board.index(r)
-      Board.index_merge(b, a)
-
-def Board.occupied_fast_got(
-  got: Map<&2, U32> & U32
-) -> Bool:
-  (_m, n) = got
-  U32.is_ne(n, 0)
+      a b =
+        Board.index(l)
+        Board.index(r)
+      T.Trie.merge(a, b)
 
 def Board.occupied_fast(
-  m: Map<&2, U32>,
+  +b: T.Trie,
   p: Pos
 ) -> Bool:
-  Board.occupied_fast_got(
-    Map.get(U32, 0, m, Pos.key(p))
+  U32.is_ne(
+    T.Trie.get(b, Pos.key32(p)),
+    0
   )
 
 def Board.has_neighbor_fast(
-  +b: Map<&2, U32>,
+  +b: T.Trie,
   +p: Pos
 ) -> Bool:
   Bool.or(
@@ -259,7 +256,7 @@ def Dir.clear(+b: List<&2, Pos>, +p: Pos, d: Dir) -> Bool:
 
 
 def Dir.clear_fast(
-  +b: Map<&2, U32>,
+  +b: T.Trie,
   +p: Pos,
   d: Dir
 ) -> Bool:
@@ -374,7 +371,7 @@ def Propose.all(
 
 
 def Propose.choose_fast(
-  +b: Map<&2, U32>,
+  +b: T.Trie,
   +p: Pos,
   dirs: List<&2, Dir>
 ) -> Pos:
@@ -390,7 +387,7 @@ def Propose.choose_fast(
       )
 
 def Propose.after_neighbor_fast(
-  +b: Map<&2, U32>,
+  +b: T.Trie,
   +p: Pos,
   phase: Phase,
   near: Bool
@@ -405,7 +402,7 @@ def Propose.after_neighbor_fast(
       }
 
 def Propose.one_fast(
-  +b: Map<&2, U32>,
+  +b: T.Trie,
   +p: Pos,
   phase: Phase
 ) -> Proposal:
@@ -417,7 +414,7 @@ def Propose.one_fast(
   )
 
 def Propose.all_fast(
-  +b: Map<&2, U32>,
+  +b: T.Trie,
   +phase: Phase,
   xs: Batch<Pos>
 ) -> Batch<Proposal>:
@@ -481,66 +478,70 @@ def Commit.ref.all(+all: Batch<Proposal>, ps: Batch<Proposal>) -> Batch<Pos>:
       Fork{a, b}
 
 # -----------------------------------------------------------------------------
-# Faster conflict counting
+# Faster conflict counting: numeric U32 trie
 # -----------------------------------------------------------------------------
 
-# Base.Map is String-keyed today, so Pos.key is used here. For the eventual
-# benchmark, replace this with a U32-keyed radix trie / dense spatial table;
-# the law step_fast == step_spec should remain unchanged.
+def Counts.singleton(p: Pos) -> T.Trie:
+  T.Trie.add(
+    T.Tip{},
+    Pos.key32(p),
+    1
+  )
 
-def Counts.singleton(p: Pos) -> Map<&2, U32>:
-  Map.set(&2, U32, MTip{}, Pos.key(p), 1)
-
-def Counts.add_got(
-  got: Map<&2, U32> & U32,
-  +key: String,
+def Counts.add(
+  m: T.Trie,
+  key: U32,
   add: U32
-) -> Map<&2, U32>:
-  (m2, old) = got
-  Map.set(&2, U32, m2, key, U32.add(old, add))
+) -> T.Trie:
+  T.Trie.add(m, key, add)
 
-def Counts.add(m: Map<&2, U32>, +key: String, add: U32) -> Map<&2, U32>:
-  Counts.add_got(Map.get(U32, 0, m, key), key, add)
+def Counts.merge(
+  a: T.Trie,
+  b: T.Trie
+) -> T.Trie:
+  T.Trie.merge(a, b)
 
-# Structural recursion is on the first map argument.
-def Counts.merge(b: Map<&2, U32>, a: Map<&2, U32>) -> Map<&2, U32>:
-  match b:
-    case MTip{}:
-      a
-    case MLeaf{k, v}:
-      Counts.add(a, k, v)
-    case MNode{pos, lo, hi}:
-      a2 = Counts.merge(lo, a)
-      Counts.merge(hi, a2)
-
-def Counts.from(ps: Batch<Proposal>) -> Map<&2, U32>:
+def Counts.from(ps: Batch<Proposal>) -> T.Trie:
   match ps:
     case One{p}:
       Counts.singleton(Proposal.dst(p))
+
     case Fork{l, r}:
-      a b = Counts.from(l) Counts.from(r)
-      Counts.merge(b, a)
+      a b =
+        Counts.from(l)
+        Counts.from(r)
+      Counts.merge(a, b)
 
-def Counts.at_got(got: Map<&2, U32> & U32) -> U32:
-  (_m, n) = got
-  n
+def Counts.at(
+  +m: T.Trie,
+  p: Pos
+) -> U32:
+  T.Trie.get(m, Pos.key32(p))
 
-def Counts.at(m: Map<&2, U32>, p: Pos) -> U32:
-  Counts.at_got(Map.get(U32, 0, m, Pos.key(p)))
-
-def Commit.fast.one(+counts: Map<&2, U32>, p: Proposal) -> Pos:
+def Commit.fast.one(
+  +counts: T.Trie,
+  p: Proposal
+) -> Pos:
   match p:
     case Proposal{src, +dst}:
-      Resolve.one(src, dst, Counts.at(counts, dst))
+      Resolve.one(
+        src,
+        dst,
+        Counts.at(counts, dst)
+      )
 
 def Commit.fast.all(
-  +counts: Map<&2, U32>, ps: Batch<Proposal>
+  +counts: T.Trie,
+  ps: Batch<Proposal>
 ) -> Batch<Pos>:
   match ps:
     case One{p}:
       One{Commit.fast.one(counts, p)}
+
     case Fork{l, r}:
-      a b = Commit.fast.all(counts, l) Commit.fast.all(counts, r)
+      a b =
+        Commit.fast.all(counts, l)
+        Commit.fast.all(counts, r)
       Fork{a, b}
 
 # -----------------------------------------------------------------------------
