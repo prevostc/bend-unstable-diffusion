@@ -1,8 +1,7 @@
 import Base
 import ./main.bend as Sim
 import ./lib/pos.bend as P
-import ./lib/grid.bend as G
-import ./lib/u32bag.bend as T
+import ./lib/bag.bend as B
 import ./proof/spec.bend as Spec
 
 # The optimized numeric destination counter computes the mathematical count.
@@ -10,7 +9,7 @@ law destination_counts_are_correct:
   for +ps: Sim.Batch<Sim.Proposal>
   for +dst: P.Pos
   {
-    Sim.Counts.at(Sim.Counts.from(ps), dst)
+    B.Bag.get(Sim.Counts.from(ps), P.Pos.key(dst))
     ==
     Spec.count_dst(ps, dst)
     : U32
@@ -18,7 +17,7 @@ law destination_counts_are_correct:
 
 # A proposal never teleports.
 law proposals_are_local:
-  for +grid: T.Trie
+  for +grid: B.Bag
   for +p: P.Pos
   for phase: Sim.Phase
   proposal = Sim.Propose.one(grid, p, phase)
@@ -26,11 +25,11 @@ law proposals_are_local:
 
 # An isolated elf stays in place.
 law isolated_stays:
-  for +grid: T.Trie
+  for +grid: B.Bag
   for +p: P.Pos
   for phase: Sim.Phase
 
-  {G.Grid.has_neighbor8(grid, p) == False{} : Bool} ->
+  {Sim.Board.has_neighbor(grid, p) == False{} : Bool} ->
   {
     Sim.Proposal.dst(Sim.Propose.one(grid, p, phase))
     ==

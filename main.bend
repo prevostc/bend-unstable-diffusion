@@ -1,15 +1,8 @@
 import Base
 import ./lib/pos.bend as P
-import ./lib/grid.bend as G
-import ./lib/u32bag.bend as T
+import ./lib/bag.bend as B
 
 # Advent of Code 2022, Day 23: Unstable Diffusion.
-#
-# This version deliberately contains two implementations of one round:
-#   - step_spec: small, direct executable specification (O(n^2))
-#   - step: destination-count map + parallel tree traversals
-#
-# The main verification target is: step == step_spec.
 #
 # Coordinates use U32. For exact AoC plane semantics, place the initial
 # configuration far enough from 0 / 2^32-1 that no simulated round wraps.
@@ -50,78 +43,67 @@ def Batch.size(-A: Data, xs: Batch<A>) -> Nat:
       a b = Batch.size(A, l) Batch.size(A, r)
       Nat.add(a, b)
 
-def Batch.to_list(-A: Data, xs: Batch<A>) -> List<&2, A>:
-  match xs:
-    case One{x}:
-      [x]
-    case Fork{l, r}:
-      a b = Batch.to_list(A, l) Batch.to_list(A, r)
-      List.append(&2, A, a, b)
-
 # -----------------------------------------------------------------------------
 # Occupancy / directional predicates
 # -----------------------------------------------------------------------------
 
+def Board.has(+b: B.Bag, p: P.Pos) -> Bool:
+  B.Bag.has(b, P.Pos.key(p))
+
+def Board.has_neighbor(+b: B.Bag, +p: P.Pos) -> Bool:
+  Bool.or(
+    Board.has(b, P.Pos.nw(p)),
+    Bool.or(
+      Board.has(b, P.Pos.n(p)),
+      Bool.or(
+        Board.has(b, P.Pos.ne(p)),
+        Bool.or(
+          Board.has(b, P.Pos.w(p)),
+          Bool.or(
+            Board.has(b, P.Pos.e(p)),
+            Bool.or(
+              Board.has(b, P.Pos.sw(p)),
+              Bool.or(
+                Board.has(b, P.Pos.s(p)),
+                Board.has(b, P.Pos.se(p))
+              )
+            )
+          )
+        )
+      )
+    )
+  )
+
+def Board.empty3(
+  +b: B.Bag,
+  a: P.Pos,
+  c: P.Pos,
+  d: P.Pos
+) -> Bool:
+  Bool.not(
+    Bool.or(
+      Board.has(b, a),
+      Bool.or(Board.has(b, c), Board.has(b, d))
+    )
+  )
+
 def Dir.step(d: Dir, p: P.Pos) -> P.Pos:
   match d:
-    case N{}:
-      P.Pos.n(p)
-    case S{}:
-      P.Pos.s(p)
-    case W{}:
-      P.Pos.w(p)
-    case E{}:
-      P.Pos.e(p)
+    case N{}: P.Pos.n(p)
+    case S{}: P.Pos.s(p)
+    case W{}: P.Pos.w(p)
+    case E{}: P.Pos.e(p)
 
-def Dir.clear(
-  +b: T.Trie,
-  +p: P.Pos,
-  d: Dir
-) -> Bool:
+def Dir.clear(+b: B.Bag, +p: P.Pos, d: Dir) -> Bool:
   match d:
     case N{}:
-      Bool.not(
-        Bool.or(
-          G.Grid.has(b, P.Pos.nw(p)),
-          Bool.or(
-            G.Grid.has(b, P.Pos.n(p)),
-            G.Grid.has(b, P.Pos.ne(p))
-          )
-        )
-      )
-
+      Board.empty3(b, P.Pos.nw(p), P.Pos.n(p), P.Pos.ne(p))
     case S{}:
-      Bool.not(
-        Bool.or(
-          G.Grid.has(b, P.Pos.sw(p)),
-          Bool.or(
-            G.Grid.has(b, P.Pos.s(p)),
-            G.Grid.has(b, P.Pos.se(p))
-          )
-        )
-      )
-
+      Board.empty3(b, P.Pos.sw(p), P.Pos.s(p), P.Pos.se(p))
     case W{}:
-      Bool.not(
-        Bool.or(
-          G.Grid.has(b, P.Pos.nw(p)),
-          Bool.or(
-            G.Grid.has(b, P.Pos.w(p)),
-            G.Grid.has(b, P.Pos.sw(p))
-          )
-        )
-      )
-
+      Board.empty3(b, P.Pos.nw(p), P.Pos.w(p), P.Pos.sw(p))
     case E{}:
-      Bool.not(
-        Bool.or(
-          G.Grid.has(b, P.Pos.ne(p)),
-          Bool.or(
-            G.Grid.has(b, P.Pos.e(p)),
-            G.Grid.has(b, P.Pos.se(p))
-          )
-        )
-      )
+      Board.empty3(b, P.Pos.ne(p), P.Pos.e(p), P.Pos.se(p))
 
 # -----------------------------------------------------------------------------
 # Phase / proposal generation
@@ -149,31 +131,27 @@ def Phase.dirs(p: Phase) -> List<&2, Dir>:
     case P3{}:
       [E{}, N{}, S{}, W{}]
 
-def Propose.pick(clear: Bool, yes: P.Pos, no: P.Pos) -> P.Pos:
-  match clear:
-    case True{}:
-      yes
-    case False{}:
-      no
-
 def Propose.choose(
-  +b: T.Trie,
+  +b: B.Bag,
   +p: P.Pos,
   dirs: List<&2, Dir>
 ) -> P.Pos:
   match dirs:
     case Nil{}:
       p
+
     case +d <> rest:
       fallback = Propose.choose(b, p, rest)
-      Propose.pick(
+
+      Bool.pick(
+        P.Pos,
         Dir.clear(b, p, d),
         Dir.step(d, p),
         fallback
       )
 
-def Propose.after_neighbor(
-  +b: T.Trie,
+def Propose.one.go(
+  +b: B.Bag,
   +p: P.Pos,
   phase: Phase,
   near: Bool
@@ -182,25 +160,22 @@ def Propose.after_neighbor(
     case False{}:
       Proposal{p, p}
     case True{}:
-      Proposal{
-        p,
-        Propose.choose(b, p, Phase.dirs(phase))
-      }
+      Proposal{p, Propose.choose(b, p, Phase.dirs(phase))}
 
 def Propose.one(
-  +b: T.Trie,
+  +b: B.Bag,
   +p: P.Pos,
   phase: Phase
 ) -> Proposal:
-  Propose.after_neighbor(
+  Propose.one.go(
     b,
     p,
     phase,
-    G.Grid.has_neighbor8(b, p)
+    Board.has_neighbor(b, p)
   )
 
 def Propose.all(
-  +b: T.Trie,
+  +b: B.Bag,
   +phase: Phase,
   xs: Batch<P.Pos>
 ) -> Batch<Proposal>:
@@ -212,11 +187,6 @@ def Propose.all(
         Propose.all(b, phase, l)
         Propose.all(b, phase, r)
       Fork{a, c}
-
-def Proposal.src(p: Proposal) -> P.Pos:
-  match p:
-    case Proposal{src, dst}:
-      src
 
 def Proposal.dst(p: Proposal) -> P.Pos:
   match p:
@@ -232,59 +202,50 @@ def Proposal.is_local(p: Proposal) -> Bool:
 # Direct reference semantics (simple, intentionally O(n^2))
 # -----------------------------------------------------------------------------
 
-def Resolve.one.go(unique: Bool, src: P.Pos, dst: P.Pos) -> P.Pos:
+def Resolve.one.go(
+  unique: Bool,
+  src: P.Pos,
+  dst: P.Pos
+) -> P.Pos:
   match unique:
     case True{}:
       dst
     case False{}:
       src
 
-def Resolve.one(src: P.Pos, dst: P.Pos, count: U32) -> P.Pos:
-  Resolve.one.go(U32.is_eq(count, 1), src, dst)
-
-# -----------------------------------------------------------------------------
-# Faster conflict counting: numeric U32 trie
-# -----------------------------------------------------------------------------
-
-def Counts.singleton(p: P.Pos) -> T.Trie:
-  T.Trie.add(
-    T.Tip{},
-    P.Pos.key32(p),
-    1
+def Resolve.one(
+  src: P.Pos,
+  dst: P.Pos,
+  count: U32
+) -> P.Pos:
+  Resolve.one.go(
+    U32.is_eq(count, 1),
+    src,
+    dst
   )
 
-def Counts.add(
-  m: T.Trie,
-  key: U32,
-  add: U32
-) -> T.Trie:
-  T.Trie.add(m, key, add)
+# -----------------------------------------------------------------------------
+# Destination counts
+# -----------------------------------------------------------------------------
 
-def Counts.merge(
-  a: T.Trie,
-  b: T.Trie
-) -> T.Trie:
-  G.Grid.merge(a, b)
-
-def Counts.from(ps: Batch<Proposal>) -> T.Trie:
+def Counts.from(ps: Batch<Proposal>) -> B.Bag:
   match ps:
     case One{p}:
-      Counts.singleton(Proposal.dst(p))
+      B.Bag.add(
+        B.Empty{},
+        P.Pos.key(Proposal.dst(p)),
+        1
+      )
 
     case Fork{l, r}:
       a b =
         Counts.from(l)
         Counts.from(r)
-      Counts.merge(a, b)
 
-def Counts.at(
-  +m: T.Trie,
-  p: P.Pos
-) -> U32:
-  T.Trie.get(m, P.Pos.key32(p))
+      B.Bag.merge(a, b)
 
 def Commit.one(
-  +counts: T.Trie,
+  +counts: B.Bag,
   p: Proposal
 ) -> P.Pos:
   match p:
@@ -292,11 +253,11 @@ def Commit.one(
       Resolve.one(
         src,
         dst,
-        Counts.at(counts, dst)
+        B.Bag.get(counts, P.Pos.key(dst))
       )
 
 def Commit.all(
-  +counts: T.Trie,
+  +counts: B.Bag,
   ps: Batch<Proposal>
 ) -> Batch<P.Pos>:
   match ps:
@@ -310,12 +271,12 @@ def Commit.all(
       Fork{a, b}
 
 # Build the numeric occupancy grid in parallel from the Batch.
-def Board.index(agents: Batch<P.Pos>) -> T.Trie:
+def Board.index(agents: Batch<P.Pos>) -> B.Bag:
   match agents:
     case One{p}:
-      G.Grid.add(
-        G.Grid.empty(),
-        p,
+      B.Bag.add(
+        B.Empty{},
+        P.Pos.key(p),
         1
       )
 
@@ -324,11 +285,11 @@ def Board.index(agents: Batch<P.Pos>) -> T.Trie:
         Board.index(l)
         Board.index(r)
 
-      G.Grid.merge(a, b)
+      B.Bag.merge(a, b)
 
 
 # -----------------------------------------------------------------------------
-# Whole round: spec vs optimized implementation
+# Whole round
 # -----------------------------------------------------------------------------
 
 def step(+agents: Batch<P.Pos>, +phase: Phase) -> Batch<P.Pos>:
@@ -349,11 +310,11 @@ def run(fuel: Nat, +agents: Batch<P.Pos>, +phase: Phase) -> Batch<P.Pos>:
 # -----------------------------------------------------------------------------
 
 def State.all_isolated.go(
-  +board: T.Trie, agents: Batch<P.Pos>
+  +board: B.Bag, agents: Batch<P.Pos>
 ) -> Bool:
   match agents:
     case One{p}:
-      Bool.not(G.Grid.has_neighbor8(board, p))
+      Bool.not(Board.has_neighbor(board, p))
     case Fork{l, r}:
       a b = State.all_isolated.go(board, l) State.all_isolated.go(board, r)
       Bool.and(a, b)
@@ -368,19 +329,19 @@ def State.all_isolated(+agents: Batch<P.Pos>) -> Bool:
 
 def sample() -> Batch<P.Pos>:
   Fork{
-    Fork{One{P.Pos{102, 101}}, One{P.Pos{103, 101}}},
+    Fork{One{P.Pos.make(102, 101)}, One{P.Pos.make(103, 101)}},
     Fork{
-      One{P.Pos{102, 102}},
-      Fork{One{P.Pos{102, 104}}, One{P.Pos{103, 104}}}
+      One{P.Pos.make(102, 102)},
+      Fork{One{P.Pos.make(102, 104)}, One{P.Pos.make(103, 104)}}
     }
   }
 
 def sample_after_3_expected() -> Batch<P.Pos>:
   Fork{
-    Fork{One{P.Pos{102, 100}}, One{P.Pos{104, 101}}},
+    Fork{One{P.Pos.make(102, 100)}, One{P.Pos.make(104, 101)}},
     Fork{
-      One{P.Pos{100, 102}},
-      Fork{One{P.Pos{102, 105}}, One{P.Pos{104, 103}}}
+      One{P.Pos.make(100, 102)},
+      Fork{One{P.Pos.make(102, 105)}, One{P.Pos.make(104, 103)}}
     }
   }
 
@@ -413,7 +374,10 @@ def Input.row(
       tail = Input.row(rest, U32.add(x, 1), y)
       Input.cell(
         Char.is_eq(c, '#'),
-        P.Pos{U32.add(x, 10000), U32.add(y, 10000)},
+        P.Pos.make(
+          U32.add(x, 10000),
+          U32.add(y, 10000)
+        ),
         tail
       )
 
