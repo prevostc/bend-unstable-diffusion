@@ -132,15 +132,8 @@ def Board.occupied(+xs: List<&2, Pos>, +q: Pos) -> Bool:
   match xs:
     case Nil{}:
       False{}
-    case +h <> t:
-      Board.occupied.go(t, q, Pos.eq(h, q))
-
-def Board.occupied.go(+tail: List<&2, Pos>, +q: Pos, hit: Bool) -> Bool:
-  match hit:
-    case True{}:
-      True{}
-    case False{}:
-      Board.occupied(tail, q)
+    case h <> t:
+      Bool.or(Pos.eq(h, q), Board.occupied(t, q))
 
 def Board.has_neighbor(+b: List<&2, Pos>, +p: Pos) -> Bool:
   Bool.or(
@@ -223,21 +216,24 @@ def Phase.dirs(p: Phase) -> List<&2, Dir>:
     case P3{}:
       [E{}, N{}, S{}, W{}]
 
+def Propose.pick(clear: Bool, yes: Pos, no: Pos) -> Pos:
+  match clear:
+    case True{}:
+      yes
+    case False{}:
+      no
+
 def Propose.choose(+b: List<&2, Pos>, +p: Pos, dirs: List<&2, Dir>) -> Pos:
   match dirs:
     case Nil{}:
       p
     case +d <> rest:
-      Propose.choose.go(b, p, rest, d, Dir.clear(b, p, d))
-
-def Propose.choose.go(
-  +b: List<&2, Pos>, +p: Pos, rest: List<&2, Dir>, d: Dir, clear: Bool
-) -> Pos:
-  match clear:
-    case True{}:
-      Dir.step(d, p)
-    case False{}:
-      Propose.choose(b, p, rest)
+      fallback = Propose.choose(b, p, rest)
+      Propose.pick(
+        Dir.clear(b, p, d),
+        Dir.step(d, p),
+        fallback
+      )
 
 def Propose.after_neighbor(
   +b: List<&2, Pos>, +p: Pos, phase: Phase, near: Bool
@@ -288,15 +284,15 @@ def Proposal.count_dst(+all: Batch<Proposal>, +dst: Pos) -> U32:
       a b = Proposal.count_dst(l, dst) Proposal.count_dst(r, dst)
       U32.add(a, b)
 
-def Resolve.one(src: Pos, dst: Pos, count: U32) -> Pos:
-  Resolve.one.go(src, dst, U32.is_eq(count, 1))
-
-def Resolve.one.go(src: Pos, dst: Pos, unique: Bool) -> Pos:
+def Resolve.one.go(unique: Bool, src: Pos, dst: Pos) -> Pos:
   match unique:
     case True{}:
       dst
     case False{}:
       src
+
+def Resolve.one(src: Pos, dst: Pos, count: U32) -> Pos:
+  Resolve.one.go(U32.is_eq(count, 1), src, dst)
 
 def Commit.ref.one(+all: Batch<Proposal>, p: Proposal) -> Pos:
   match p:
@@ -322,9 +318,16 @@ def Commit.ref.all(+all: Batch<Proposal>, ps: Batch<Proposal>) -> Batch<Pos>:
 def Counts.singleton(p: Pos) -> Map<&2, U32>:
   Map.set(&2, U32, MTip{}, Pos.key(p), 1)
 
-def Counts.add(m: Map<&2, U32>, +key: String, add: U32) -> Map<&2, U32>:
-  (m2, old) = Map.get(U32, 0, m, key)
+def Counts.add_got(
+  got: Map<&2, U32> & U32,
+  +key: String,
+  add: U32
+) -> Map<&2, U32>:
+  (m2, old) = got
   Map.set(&2, U32, m2, key, U32.add(old, add))
+
+def Counts.add(m: Map<&2, U32>, +key: String, add: U32) -> Map<&2, U32>:
+  Counts.add_got(Map.get(U32, 0, m, key), key, add)
 
 # Structural recursion is on the first map argument.
 def Counts.merge(b: Map<&2, U32>, a: Map<&2, U32>) -> Map<&2, U32>:
@@ -345,9 +348,12 @@ def Counts.from(ps: Batch<Proposal>) -> Map<&2, U32>:
       a b = Counts.from(l) Counts.from(r)
       Counts.merge(b, a)
 
-def Counts.at(m: Map<&2, U32>, p: Pos) -> U32:
-  (m2, n) = Map.get(U32, 0, m, Pos.key(p))
+def Counts.at_got(got: Map<&2, U32> & U32) -> U32:
+  (_m, n) = got
   n
+
+def Counts.at(m: Map<&2, U32>, p: Pos) -> U32:
+  Counts.at_got(Map.get(U32, 0, m, Pos.key(p)))
 
 def Commit.fast.one(+counts: Map<&2, U32>, p: Proposal) -> Pos:
   match p:
@@ -394,16 +400,11 @@ def Board.unique(xs: List<&2, Pos>) -> Bool:
   match xs:
     case Nil{}:
       True{}
-    case h <> t:
-      +tail = t
-      Board.unique.go(tail, Board.occupied(tail, h))
-
-def Board.unique.go(tail: List<&2, Pos>, duplicate: Bool) -> Bool:
-  match duplicate:
-    case True{}:
-      False{}
-    case False{}:
-      Board.unique(tail)
+    case h <> +t:
+      Bool.and(
+        Bool.not(Board.occupied(t, h)),
+        Board.unique(t)
+      )
 
 def State.unique(agents: Batch<Pos>) -> Bool:
   Board.unique(Batch.to_list(Pos, agents))

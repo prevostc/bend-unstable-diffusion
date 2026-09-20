@@ -4,7 +4,7 @@ setup:
 	bash scripts/bootstrap.sh
 
 version:
-	bend --version
+	bend version
 
 guide:
 	bend guide
