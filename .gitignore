@@ -1,3 +1,6 @@
 build/
 *.gpu
 .DS_Store
+
+data
+.env

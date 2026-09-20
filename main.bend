@@ -135,6 +135,73 @@ def Board.occupied(+xs: List<&2, Pos>, +q: Pos) -> Bool:
     case h <> t:
       Bool.or(Pos.eq(h, q), Board.occupied(t, q))
 
+
+# -----------------------------------------------------------------------------
+# Fast occupancy index
+# -----------------------------------------------------------------------------
+
+def Board.index_merge(
+  b: Map<&2, U32>,
+  a: Map<&2, U32>
+) -> Map<&2, U32>:
+  match b:
+    case MTip{}:
+      a
+    case MLeaf{k, v}:
+      Map.set(&2, U32, a, k, 1)
+    case MNode{pos, lo, hi}:
+      a2 = Board.index_merge(lo, a)
+      Board.index_merge(hi, a2)
+
+def Board.index(xs: Batch<Pos>) -> Map<&2, U32>:
+  match xs:
+    case One{p}:
+      Map.set(&2, U32, MTip{}, Pos.key(p), 1)
+    case Fork{l, r}:
+      a b = Board.index(l) Board.index(r)
+      Board.index_merge(b, a)
+
+def Board.occupied_fast_got(
+  got: Map<&2, U32> & U32
+) -> Bool:
+  (_m, n) = got
+  U32.is_ne(n, 0)
+
+def Board.occupied_fast(
+  m: Map<&2, U32>,
+  p: Pos
+) -> Bool:
+  Board.occupied_fast_got(
+    Map.get(U32, 0, m, Pos.key(p))
+  )
+
+def Board.has_neighbor_fast(
+  +b: Map<&2, U32>,
+  +p: Pos
+) -> Bool:
+  Bool.or(
+    Board.occupied_fast(b, Pos.nw(p)),
+    Bool.or(
+      Board.occupied_fast(b, Pos.n(p)),
+      Bool.or(
+        Board.occupied_fast(b, Pos.ne(p)),
+        Bool.or(
+          Board.occupied_fast(b, Pos.w(p)),
+          Bool.or(
+            Board.occupied_fast(b, Pos.e(p)),
+            Bool.or(
+              Board.occupied_fast(b, Pos.sw(p)),
+              Bool.or(
+                Board.occupied_fast(b, Pos.s(p)),
+                Board.occupied_fast(b, Pos.se(p))
+              )
+            )
+          )
+        )
+      )
+    )
+  )
+
 def Board.has_neighbor(+b: List<&2, Pos>, +p: Pos) -> Bool:
   Bool.or(
     Board.occupied(b, Pos.nw(p)),
@@ -189,6 +256,54 @@ def Dir.clear(+b: List<&2, Pos>, +p: Pos, d: Dir) -> Bool:
         Board.occupied(b, Pos.ne(p)),
         Bool.or(Board.occupied(b, Pos.e(p)), Board.occupied(b, Pos.se(p)))
       ))
+
+
+def Dir.clear_fast(
+  +b: Map<&2, U32>,
+  +p: Pos,
+  d: Dir
+) -> Bool:
+  match d:
+    case N{}:
+      Bool.not(
+        Bool.or(
+          Board.occupied_fast(b, Pos.nw(p)),
+          Bool.or(
+            Board.occupied_fast(b, Pos.n(p)),
+            Board.occupied_fast(b, Pos.ne(p))
+          )
+        )
+      )
+    case S{}:
+      Bool.not(
+        Bool.or(
+          Board.occupied_fast(b, Pos.sw(p)),
+          Bool.or(
+            Board.occupied_fast(b, Pos.s(p)),
+            Board.occupied_fast(b, Pos.se(p))
+          )
+        )
+      )
+    case W{}:
+      Bool.not(
+        Bool.or(
+          Board.occupied_fast(b, Pos.nw(p)),
+          Bool.or(
+            Board.occupied_fast(b, Pos.w(p)),
+            Board.occupied_fast(b, Pos.sw(p))
+          )
+        )
+      )
+    case E{}:
+      Bool.not(
+        Bool.or(
+          Board.occupied_fast(b, Pos.ne(p)),
+          Bool.or(
+            Board.occupied_fast(b, Pos.e(p)),
+            Board.occupied_fast(b, Pos.se(p))
+          )
+        )
+      )
 
 # -----------------------------------------------------------------------------
 # Phase / proposal generation
@@ -255,6 +370,64 @@ def Propose.all(
       One{Propose.one(b, p, phase)}
     case Fork{l, r}:
       a c = Propose.all(b, phase, l) Propose.all(b, phase, r)
+      Fork{a, c}
+
+
+def Propose.choose_fast(
+  +b: Map<&2, U32>,
+  +p: Pos,
+  dirs: List<&2, Dir>
+) -> Pos:
+  match dirs:
+    case Nil{}:
+      p
+    case +d <> rest:
+      fallback = Propose.choose_fast(b, p, rest)
+      Propose.pick(
+        Dir.clear_fast(b, p, d),
+        Dir.step(d, p),
+        fallback
+      )
+
+def Propose.after_neighbor_fast(
+  +b: Map<&2, U32>,
+  +p: Pos,
+  phase: Phase,
+  near: Bool
+) -> Proposal:
+  match near:
+    case False{}:
+      Proposal{p, p}
+    case True{}:
+      Proposal{
+        p,
+        Propose.choose_fast(b, p, Phase.dirs(phase))
+      }
+
+def Propose.one_fast(
+  +b: Map<&2, U32>,
+  +p: Pos,
+  phase: Phase
+) -> Proposal:
+  Propose.after_neighbor_fast(
+    b,
+    p,
+    phase,
+    Board.has_neighbor_fast(b, p)
+  )
+
+def Propose.all_fast(
+  +b: Map<&2, U32>,
+  +phase: Phase,
+  xs: Batch<Pos>
+) -> Batch<Proposal>:
+  match xs:
+    case One{p}:
+      One{Propose.one_fast(b, p, phase)}
+    case Fork{l, r}:
+      a c =
+        Propose.all_fast(b, phase, l)
+        Propose.all_fast(b, phase, r)
       Fork{a, c}
 
 def Proposal.src(p: Proposal) -> Pos:
@@ -380,12 +553,12 @@ def step_spec(+agents: Batch<Pos>, +phase: Phase) -> Batch<Pos>:
   Commit.ref.all(props, props)
 
 def step_fast(+agents: Batch<Pos>, +phase: Phase) -> Batch<Pos>:
-  +board = Batch.to_list(Pos, agents)
-  +props = Propose.all(board, phase, agents)
+  +board = Board.index(agents)
+  +props = Propose.all_fast(board, phase, agents)
   counts = Counts.from(props)
   Commit.fast.all(counts, props)
 
-def run(fuel: Nat, +agents: Batch<Pos>, phase: Phase) -> Batch<Pos>:
+def run(fuel: Nat, +agents: Batch<Pos>, +phase: Phase) -> Batch<Pos>:
   match fuel:
     case 0n:
       agents
@@ -445,8 +618,161 @@ def sample_after_3_expected() -> Batch<Pos>:
     }
   }
 
-# Tiny executable smoke test for Codespaces / CPU. The GPU entrypoint lives in
-# gpu.bend; the interesting benchmark should generate a much larger balanced Batch.
+
+# -----------------------------------------------------------------------------
+# AoC input parsing / CLI
+# -----------------------------------------------------------------------------
+
+# Turn a '#' cell into an elf position; '.' contributes nothing.
+def Input.cell(
+  hit: Bool,
+  p: Pos,
+  rest: List<&2, Pos>
+) -> List<&2, Pos>:
+  match hit:
+    case False{}:
+      rest
+    case True{}:
+      p <> rest
+
+def Input.row(
+  chars: List<&2, Char>,
+  +x: U32,
+  +y: U32
+) -> List<&2, Pos>:
+  match chars:
+    case Nil{}:
+      Nil{}
+    case c <> rest:
+      tail = Input.row(rest, U32.add(x, 1), y)
+      Input.cell(
+        Char.is_eq(c, '#'),
+        Pos{U32.add(x, 10000), U32.add(y, 10000)},
+        tail
+      )
+
+def Input.rows(
+  lines: List<&2, String>,
+  +y: U32
+) -> List<&2, Pos>:
+  match lines:
+    case Nil{}:
+      Nil{}
+    case row <> rest:
+      here = Input.row(String.to_list(row), 0, y)
+      below = Input.rows(rest, U32.add(y, 1))
+      List.append(&2, Pos, here, below)
+
+# Convert the parsed list into the Batch representation expected by the
+# parallel simulation.
+def Batch.leaves(
+  xs: List<&2, Pos>
+) -> List<&2, Batch<Pos>>:
+  match xs:
+    case Nil{}:
+      Nil{}
+    case p <> rest:
+      One{p} <> Batch.leaves(rest)
+
+# Pair adjacent trees in one pass:
+# [a,b,c,d,e] -> [Fork(a,b), Fork(c,d), e]
+def Batch.pair(
+  xs: List<&2, Batch<Pos>>
+) -> List<&2, Batch<Pos>>:
+  match xs:
+    case Nil{}:
+      Nil{}
+    case a <> rest:
+      match rest:
+        case Nil{}:
+          [a]
+        case b <> tail:
+          Fork{a, b} <> Batch.pair(tail)
+
+# Repeated pairing reduces the list to one balanced tree.
+# fuel makes termination structurally obvious to Bend.
+def Batch.collapse(
+  fuel: Nat,
+  xs: List<&2, Batch<Pos>>
+) -> Maybe<&2, Batch<Pos>>:
+  match fuel xs:
+    case 0n _:
+      None{}
+    case 1n+p Nil{}:
+      None{}
+    case 1n+p a <> rest:
+      match rest:
+        case Nil{}:
+          Some{a}
+        case b <> tail:
+          Batch.collapse(
+            p,
+            Fork{a, b} <> Batch.pair(tail)
+          )
+
+def Batch.from_list(
+  +xs: List<&2, Pos>
+) -> Maybe<&2, Batch<Pos>>:
+  Batch.collapse(
+    List.length(&2, Pos, xs),
+    Batch.leaves(xs)
+  )
+
+# File.read returns the File handle back together with the Result.
+def Input.read_ok(file: File, text: String) -> IO(String):
+  do IO<String>:
+    u : Unit <- File.close(file)
+    return text
+
+def Input.read_fail(file: File, err: U32 & String) -> IO(String):
+  (code, message) = err
+  do IO<String>:
+    u : Unit <- File.close(file)
+    IO.die(String, code, message)
+
+def Input.read_result(
+  pair: File & Result<&1, &1, U32 & String, String>
+) -> IO(String):
+  (file, result) = pair
+  match result:
+    case Done{text}:
+      Input.read_ok(file, text)
+    case Fail{error}:
+      Input.read_fail(file, error)
+
+def Input.read(path: String) -> IO(String):
+  do IO<String>:
+    file : File <- IO.try(File, File.open(path, "r"))
+    pair : File & Result<&1, &1, U32 & String, String> <-
+      File.read(file, 1048576)
+    text : String <- Input.read_result(pair)
+    return text
+
+def Input.run(parsed: Maybe<&2, Batch<Pos>>) -> IO(Unit):
+  match parsed:
+    case None{}:
+      IO.die(Unit, 1, "input contains no elves")
+    case Some{agents}:
+      +result = run(10n, agents, P0{})
+      IO.print(
+        "elves after 10 rounds: "
+        ++ Nat.show(Batch.size(Pos, result))
+      )
+
+def Input.main_args(args: List<String>) -> IO(Unit):
+  match args:
+    case Nil{}:
+      IO.die(Unit, 1, "usage: bend main.bend input.txt")
+    case path <> rest:
+      do IO<Unit>:
+        text : String <- Input.read(path)
+        Input.run(
+          Batch.from_list(
+            Input.rows(String.lines(text), 0)
+          )
+        )
+
 def main() -> IO(Unit):
-  result = run(3n, sample(), P0{})
-  IO.print("elves after 3 rounds: " ++ Nat.show(Batch.size(Pos, result)))
+  do IO<Unit>:
+    args : List<String> <- IO.args()
+    Input.main_args(args)
